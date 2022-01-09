@@ -6,6 +6,12 @@
 import Foundation
 import SwiftUI
 
+public enum RoutePresentationMode {
+    case navigation
+    case sheet
+    case `default`
+}
+
 /// A route showing only its content when its path matches with the environment path.
 ///
 /// When the environment path matches a `Route`'s path, its contents will be rendered.
@@ -70,21 +76,24 @@ public struct Route<ValidatedData, Content: View>: View {
 	@EnvironmentObject private var navigator: Navigator
 	@EnvironmentObject private var switchEnvironment: SwitchRoutesEnvironment
 	@StateObject private var pathMatcher = PathMatcher()
-
+    
+    private let presentationMode: RoutePresentationMode
 	private let content: (ValidatedData) -> Content
 	private let path: String
 	private let validator: Validator
-
+    
 	/// - Parameter path: A path glob to test with the current path. See documentation for `Route`.
 	/// - Parameter validator: A function that validates and transforms the route parameters.
 	/// - Parameter content: Views to render. The validated data is passed as an argument.
 	public init(
 		_ path: String = "*",
-		validator: @escaping Validator,
+        validator: @escaping Validator,
+        presentationMode: RoutePresentationMode = .default,
 		@ViewBuilder content: @escaping (ValidatedData) -> Content
 	) {
 		self.content = content
 		self.path = path
+        self.presentationMode = presentationMode
 		self.validator = validator
 	}
 
@@ -121,41 +130,73 @@ public struct Route<ValidatedData, Content: View>: View {
 				fatalError("Unable to compile path glob '\(path)' to Regex. Error: \(error)")
 			}
 		}
+        
+        let view = Group {
+            if let validatedData = validatedData,
+               let routeInformation = routeInformation
+            {
+                content(validatedData)
+                    .environment(\.relativePath, routeInformation.path)
+                    .environmentObject(routeInformation)
+                    .environmentObject(SwitchRoutesEnvironment())
+            }
+        }
 
-		return Group {
-			if let validatedData = validatedData,
-			   let routeInformation = routeInformation
-			{
-				content(validatedData)
-					.environment(\.relativePath, routeInformation.path)
-					.environmentObject(routeInformation)
-					.environmentObject(SwitchRoutesEnvironment())
-			}
-		}
+        let isPresented = Binding(
+            get: { validatedData != nil && routeInformation != nil },
+            set: { _, _ in }
+        )
+        
+        return Group {
+            switch presentationMode {
+            case .navigation:
+                NavigationLink(destination: view, isActive: isPresented) {
+                    EmptyView()
+                }
+                .hidden()
+            case .sheet:
+                Text("")
+                    .hidden()
+                    .sheet(
+                        isPresented: isPresented,
+                        onDismiss: {
+                            if navigator.lastAction?.action != .back {
+                                navigator.goBack()
+                            }
+                        },
+                        content: { view }
+                    )
+            case .default:
+                view
+            }
+        }
 	}
 }
 
 public extension Route where ValidatedData == RouteInformation {
 	/// - Parameter path: A path glob to test with the current path. See documentation for `Route`.
 	/// - Parameter content: Views to render. An `RouteInformation` is passed containing route parameters.
-	init(_ path: String = "*", @ViewBuilder content: @escaping (RouteInformation) -> Content) {
+    init(_ path: String = "*", presentationMode: RoutePresentationMode = .default, @ViewBuilder content: @escaping (RouteInformation) -> Content) {
 		self.path = path
 		self.validator = { $0 }
+        self.presentationMode = presentationMode
 		self.content = content
 	}
 
 	/// - Parameter path: A path glob to test with the current path. See documentation for `Route`.
 	/// - Parameter content: Views to render.
-	init(_ path: String = "*", @ViewBuilder content: @escaping () -> Content) {
+	init(_ path: String = "*", presentationMode: RoutePresentationMode = .default, @ViewBuilder content: @escaping () -> Content) {
 		self.path = path
 		self.validator = { $0 }
+        self.presentationMode = presentationMode
 		self.content = { _ in content() }
 	}
 
 	/// - Parameter path: A path glob to test with the current path. See documentation for `Route`.
 	/// - Parameter content: View to render (autoclosure).
-	init(_ path: String = "*", content: @autoclosure @escaping () -> Content) {
+	init(_ path: String = "*", presentationMode: RoutePresentationMode = .default, content: @autoclosure @escaping () -> Content) {
 		self.path = path
+        self.presentationMode = presentationMode
 		self.validator = { $0 }
 		self.content = { _ in content() }
 	}
